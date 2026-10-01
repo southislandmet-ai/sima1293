@@ -50,12 +50,25 @@ app turns into areas following the regional boundaries and forecast zones
 (lightly rounded; say "no smoothing" for sharp edges). The result opens in the
 Standard tab for fine-tuning. Works with every template, including custom ones.
 
+Forecast wording the plot understands:
+
+* **Regions and zones** – regional councils (Canterbury, Otago …) and
+  forecast zones (Fiordland, Mackenzie Country, Kaikōura Coast, Buller …).
+* **Relative locations** – "south of Gore", "north of Rolleston", "between
+  Timaru and Ōamaru", "east of Arthur's Pass". Over 200 towns, passes and
+  landmarks are known (`data/nz-geo.js`); the cut applies to the region
+  named, or the whole island if none is.
+* **Coastal / inland** – "coastal Otago", "inland Canterbury".
+* **Coastline** – areas follow the coast with a small margin; marine hazards
+  (gales, swell) are allowed a wider offshore margin.
+
 ## Settings tab
 
 * **Claude API key** – stored in a cookie on this device only and sent
   directly from the browser to `api.anthropic.com`. Choose the model and test
   the connection.
-* **Branding** – wordmark lines, website text, optional logo upload.
+* **Branding** – the SIMA logo is used on every map and in the editor; upload
+  a replacement file if it changes. Website text shown on the legend.
 * **Export & editor** – default PNG scale, hints bar, automatic labels.
 * **Map types** – duplicate a built-in template, create one by hand, or
   describe one and let Claude draft it (legend style, labels, categories and
@@ -68,7 +81,8 @@ index.html         app shell
 css/app.css        UI styles
 css/fonts.css      Poppins (embedded for exact PNG export)
 js/geo.js          projection, smooth curves, geometry helpers
-js/templates.js    map types, logo, legends, titles
+js/templates.js    map types, legend card, headings
+assets/logo.js     the SIMA logo embedded for exports; assets/logo.png for the UI
 js/icons.js        weather icon set
 js/ai.js           Claude API calls (raw HTTP from the browser)
 js/app.js          editor, inspector, export, AI tab, settings

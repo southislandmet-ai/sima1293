@@ -15,7 +15,7 @@
   // =====================================================================
   // Settings
   // =====================================================================
-  const defaultSettings = () => ({ model: AI.DEFAULT_MODEL, brand: { line1: 'South Island', line2: 'Meteorological Agency', site: 'sima.co.nz', logoData: null }, exportScale: 1, showHints: true, autoLabels: true, customTypes: [] });
+  const defaultSettings = () => ({ model: AI.DEFAULT_MODEL, brand: { site: 'sima.co.nz', logoData: null, logoRatio: null }, exportScale: 1, showHints: true, autoLabels: true, customTypes: [] });
   let settings = (() => { try { return Object.assign(defaultSettings(), JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')); } catch (e) { return defaultSettings(); } })();
   function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { toast('Could not save settings (storage full?)', 'err'); } }
   const allTypes = () => Templates.MAP_TYPES.concat(settings.customTypes || []);
@@ -1018,7 +1018,9 @@ ${cats}${hz}
 Geographic building blocks you can refer to (areas are built by combining these; the app follows their boundaries, lightly rounded):
 Regional councils / districts (exact boundaries): ${regions.join('; ')}.
 Forecast zones: ${zones.join('; ')}.
-You may also describe extra outline points as lon/lat for coastal or offshore extents (South Island spans roughly 166.4E–174.4E, 40.5S–47.3S).
+Towns and landmarks that can be used as reference points for relative locations ("south of Gore", "north of Rolleston", "east of Arthur's Pass"): ${NZ_GEO.places.filter(p => p.lat < -40.3).map(p => p.name).join(', ')}.
+Relative wording is supported in the plot: an area can be limited to one side of a town (cuts), restricted to the coastal strip or to inland parts (band), and areas follow the coastline by default (clip "land"), with a wider offshore allowance for marine hazards (clip "coast") or no clipping. "Whole island" wording means the South Island.
+You may also describe extra outline points as lon/lat for offshore extents (South Island spans roughly 166.4E–174.4E, 40.5S–47.3S).
 
 How to behave in chat:
 - Be concise and practical, like a colleague in a forecast office. Use New Zealand place names and macrons where usual (Kaikōura, Wānaka, Ōamaru).
@@ -1043,6 +1045,9 @@ How to behave in chat:
             mode: { type: 'string', enum: ['zones', 'points'] },
             smooth: { type: 'boolean', description: 'false for sharp edges' },
             label: { type: 'string', description: 'optional custom label text (newline separated lines)' },
+            cuts: { type: 'array', description: 'relative-location limits such as "south of Gore": keep only the part of the area on that side of the place', items: { type: 'object', additionalProperties: false, properties: { ref: { type: 'string', description: 'town or landmark name' }, side: { type: 'string', enum: ['north', 'south', 'east', 'west', 'northeast', 'northwest', 'southeast', 'southwest'] } }, required: ['ref', 'side'] } },
+            band: { type: 'string', enum: ['none', 'coastal', 'inland'], description: 'coastal = only the coastal strip of the named zones; inland = away from the coast' },
+            clip: { type: 'string', enum: ['land', 'coast', 'none'], description: 'land = follow the coastline with a small margin (default); coast = allow a wider offshore margin for marine hazards; none = no clipping' },
           }, required: ['category'],
         },
       },
@@ -1082,7 +1087,7 @@ How to behave in chat:
     if (pending) { $('#chatText').value = ''; pushChat('user', pending); history.push({ role: 'user', content: pending }); }
     aiBusy = true; $('#aiStatus').textContent = 'Plotting areas…'; $('#chatSend').disabled = true; $('#chatPlot').disabled = true;
     try {
-      const sys = aiSystemPrompt(type) + `\n\nPLOTTING MODE: Produce the final plan as JSON for the app. For each area pick the category id, hazards, and the zones/regions it covers (use names from the lists; prefer regional councils when the forecaster names a whole region, otherwise forecast zones). Add "points" only for offshore/coastal extents the zones cannot express, or set mode "points" with a full 8–16 point outline when no zones fit. Set smooth to false only if the forecaster asked for sharp edges. Order areas from lowest to highest category so higher levels draw on top.`;
+      const sys = aiSystemPrompt(type) + `\n\nPLOTTING MODE: Produce the final plan as JSON for the app. For each area pick the category id, hazards, and the zones/regions it covers (use names from the lists; prefer regional councils when the forecaster names a whole region, otherwise forecast zones). Express relative wording with the modifiers: "south of Gore" -> cuts [{ref:"Gore", side:"south"}] on the zones/region mentioned (or on the whole South Island if none was named); "coastal Otago" -> zones ["Otago"], band "coastal"; "inland Canterbury" -> band "inland"; "north of Rolleston" -> cuts [{ref:"Rolleston", side:"north"}]. Combine several cuts for "between Timaru and Oamaru" (south of Timaru + north of Oamaru). Use clip "coast" for gales, swell and other marine hazards that extend offshore, "land" otherwise. Add "points" only for extents the zones and modifiers cannot express, or set mode "points" with a full 8–16 point outline when nothing fits. Set smooth to false only if the forecaster asked for sharp edges. Order areas from lowest to highest category so higher levels draw on top.`;
       const msgs = history.map(m => ({ role: m.role, content: m.content })).concat([{ role: 'user', content: 'Plot the areas now. Output the JSON plan only.' }]);
       const plan = await AI.json({ system: sys, messages: msgs, schema: PLAN_SCHEMA, model: settings.model });
       const result = applyPlan(plan, type);
@@ -1092,8 +1097,26 @@ How to behave in chat:
     aiBusy = false; $('#aiStatus').textContent = ''; $('#chatSend').disabled = false; $('#chatPlot').disabled = false;
   }
   const fold = s => String(s || '').toLowerCase().replace(/ā/g, 'a').replace(/ē/g, 'e').replace(/ī/g, 'i').replace(/ō/g, 'o').replace(/ū/g, 'u').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  function placeFor(name) {
+    const n = fold(name);
+    let p = NZ_GEO.places.find(q => fold(q.name) === n);
+    if (!p) p = NZ_GEO.places.find(q => fold(q.name).startsWith(n) || n.startsWith(fold(q.name)));
+    if (p) return { lon: p.lon, lat: p.lat };
+    const zp = zonePolysFor(name);
+    if (zp) { const pts = zp.flat(); return { lon: pts.reduce((a, q) => a + q[0], 0) / pts.length, lat: pts.reduce((a, q) => a + q[1], 0) / pts.length }; }
+    return null;
+  }
+  let landPolysCache = null, landPolysKey = '';
+  function landPolys() {
+    const key = JSON.stringify(frame);
+    if (landPolysCache && landPolysKey === key) return landPolysCache;
+    landPolysKey = key; landPolysCache = NZ_GEO.regions.flatMap(r => r.rings.filter(rg => rg.length > 12).map(rg => rg.map(q => toXY(q[0], q[1]))));
+    return landPolysCache;
+  }
   function zonePolysFor(name) {
     const n = fold(name);
+    if (/^(the )?(whole )?south island$/.test(n) || n === 'te waipounamu') return NZ_GEO.regions.filter(r => r.island === 'S').flatMap(r => r.rings.filter(rg => rg.length > 12).map(rg => rg.filter((p, i) => i % 2 === 0)));
+    if (/^(the )?(whole )?north island$/.test(n)) return NZ_GEO.regions.filter(r => r.island === 'N').flatMap(r => r.rings.filter(rg => rg.length > 12).map(rg => rg.filter((p, i) => i % 2 === 0)));
     const reg = NZ_GEO.regions.find(r => { const f = fold(r.name); return f === n || f.replace(/ (district|city|regional council)$/, '') === n || (n === f.split(' ')[0] && f.length - n.length < 10 && !/^(west|bay)$/.test(n)); });
     if (reg) return reg.rings.filter(r => r.length > 12).map(r => r.filter((p, i) => i % 2 === 0));
     const z = NZ_ZONES.find(z => fold(z.name) === n || (z.aliases || []).some(a => fold(a) === n));
@@ -1114,19 +1137,37 @@ How to behave in chat:
   }
   // Union of several polygons (canvas coords) via a raster mask, traced back
   // to an outline so the result follows the zone boundaries instead of a hull.
-  function unionOutline(polys, cell, grow) {
-    cell = cell || 10; grow = grow == null ? 2 : grow;
+  function unionOutline(polys, cell, grow, mods) {
+    cell = cell || 10; grow = grow == null ? 2 : grow; mods = mods || {};
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     polys.forEach(pl => pl.forEach(p => { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }));
-    const pad = (grow + 2) * cell;
+    const pad = (grow + 14) * cell;
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
     const cols = Math.ceil((maxX - minX) / cell), rows = Math.ceil((maxY - minY) / cell);
     if (cols * rows > 400000) return convexHull(polys.flat());
-    let mask = new Uint8Array(cols * rows);
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-      const pt = { x: minX + (c + 0.5) * cell, y: minY + (r + 0.5) * cell };
-      if (polys.some(pl => Geo.pointInPolygon(pt, pl))) mask[r * cols + c] = 1;
-    }
+    const cellPt = (r, c) => ({ x: minX + (c + 0.5) * cell, y: minY + (r + 0.5) * cell });
+    const rasterise = plist => {
+      const m = new Uint8Array(cols * rows);
+      plist.forEach(pl => {
+        const bb = Geo.bbox(pl);
+        const r0 = Math.max(0, Math.floor((bb.minY - minY) / cell)), r1 = Math.min(rows - 1, Math.ceil((bb.maxY - minY) / cell));
+        const c0 = Math.max(0, Math.floor((bb.minX - minX) / cell)), c1 = Math.min(cols - 1, Math.ceil((bb.maxX - minX) / cell));
+        for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) { if (!m[r * cols + c] && Geo.pointInPolygon(cellPt(r, c), pl)) m[r * cols + c] = 1; }
+      });
+      return m;
+    };
+    let mask = rasterise(polys);
+    // "south of Gore" style cuts: drop cells on the far side of the reference point
+    (mods.cuts || []).forEach(cut => {
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const p = cellPt(r, c); let keep = true;
+        if (/north/.test(cut.side) && p.y > cut.y) keep = false;
+        if (/south/.test(cut.side) && p.y < cut.y) keep = false;
+        if (/east/.test(cut.side) && p.x < cut.x) keep = false;
+        if (/west/.test(cut.side) && p.x > cut.x) keep = false;
+        if (!keep) mask[r * cols + c] = 0;
+      }
+    });
     // dilate (grow) then erode (grow-1) -> closes gaps between touching zones
     const dil = (m, n) => { for (let k = 0; k < n; k++) { const o = new Uint8Array(m); for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { if (m[r * cols + c]) continue; if ((r && m[(r - 1) * cols + c]) || (r < rows - 1 && m[(r + 1) * cols + c]) || (c && m[r * cols + c - 1]) || (c < cols - 1 && m[r * cols + c + 1])) o[r * cols + c] = 1; } m = o; } return m; };
     const ero = (m, n) => { for (let k = 0; k < n; k++) { const o = new Uint8Array(m); for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) { if (!m[r * cols + c]) continue; if (!r || !c || r === rows - 1 || c === cols - 1 || !m[(r - 1) * cols + c] || !m[(r + 1) * cols + c] || !m[r * cols + c - 1] || !m[r * cols + c + 1]) o[r * cols + c] = 0; } m = o; } return m; };
@@ -1150,6 +1191,16 @@ How to behave in chat:
       if (comp.count <= 1 || g >= grow + 10) { result = ero(grown, 2); if (comp.count > 1) { const c2 = components(result); for (let i = 0; i < result.length; i++) result[i] = c2.label[i] === c2.best ? 1 : 0; } break; }
     }
     mask = result;
+    // land clipping and coastal / inland bands
+    if (mods.land && (mods.clip !== 'none' || (mods.band && mods.band !== 'none'))) {
+      const land = rasterise(mods.land);
+      if (mods.band === 'coastal') { const inner = ero(land, 6); const coastal = land.map((v, i) => v && !inner[i] ? 1 : 0); const cz = dil(coastal, 2); for (let i = 0; i < mask.length; i++) if (!cz[i]) mask[i] = 0; }
+      else if (mods.band === 'inland') { const inner = ero(land, 5); for (let i = 0; i < mask.length; i++) if (!inner[i]) mask[i] = 0; }
+      if (mods.clip !== 'none') { const margin = mods.clip === 'coast' ? 8 : 2; const ld = dil(land, margin); for (let i = 0; i < mask.length; i++) if (!ld[i]) mask[i] = 0; }
+      // soften the clipped edge and keep the largest piece
+      mask = dil(ero(mask, 1), 1);
+      const c3 = components(mask); if (c3.count > 1) for (let i = 0; i < mask.length; i++) mask[i] = c3.label[i] === c3.best ? 1 : 0;
+    }
     // Moore-neighbour boundary trace, starting from the top-most left-most cell
     const at = (r, c) => r >= 0 && c >= 0 && r < rows && c < cols && mask[r * cols + c] === 1;
     let start = -1; for (let i = 0; i < mask.length; i++) if (mask[i]) { start = i; break; }
@@ -1192,8 +1243,11 @@ How to behave in chat:
       let pts = [];
       const zonePolys = [], extraPts = [];
       const useRaw = pa.mode === 'points' && pa.points && pa.points.length >= 3;
+      const cuts = (pa.cuts || []).map(ct => { const ref = placeFor(ct.ref); if (!ref) { skipped.push(ct.ref); return null; } const xy = toXY(ref.lon, ref.lat); return { x: xy.x, y: xy.y, side: fold(ct.side).replace(/ /g, '') }; }).filter(Boolean);
+      let zoneNames = (pa.zones || []).slice();
+      if (!zoneNames.length && !useRaw && (cuts.length || (pa.band && pa.band !== 'none'))) zoneNames = ['South Island'];
       if (!useRaw) {
-        (pa.zones || []).forEach(z => { const zp = zonePolysFor(z); if (zp) zp.forEach(poly => { const cp = poly.map(q => toXY(q[0], q[1])); zonePolys.push(cp); pts.push(...cp); }); else skipped.push(z); });
+        zoneNames.forEach(z => { const zp = zonePolysFor(z); if (zp) zp.forEach(poly => { const cp = poly.map(q => toXY(q[0], q[1])); zonePolys.push(cp); pts.push(...cp); }); else skipped.push(z); });
         (pa.points || []).forEach(q => { const xy = toXY(q.lon, q.lat); extraPts.push(xy); pts.push(xy); });
       } else pts = pa.points.map(q => toXY(q.lon, q.lat));
       if (pts.length < 3) { if (!(pa.zones || []).length) skipped.push(pa.category); return; }
@@ -1205,8 +1259,10 @@ How to behave in chat:
         const polys = zonePolys.slice();
         if (extraPts.length >= 3) polys.push(convexHull(extraPts));
         else if (extraPts.length) polys.push(convexHull(extraPts.concat(zonePolys.flat().slice(0, 2))));
-        outline = unionOutline(polys, 10, 2);
-        outline = simplifyRing(outline, 18);
+        const marine = /gale|swell|wind|inundation|surf|sea/i.test(JSON.stringify(pa.hazards || []) + ' ' + (pa.category || ''));
+        const clip = pa.clip || (marine ? 'coast' : 'land');
+        outline = unionOutline(polys, 10, 2, { cuts, band: pa.band || 'none', clip, land: landPolys() });
+        outline = simplifyRing(outline, 16);
         // cap the number of points so it stays easy to edit by hand
         const maxPts = 28;
         if (outline.length > maxPts) { const step = outline.length / maxPts; outline = Array.from({ length: maxPts }, (_, i) => outline[Math.floor(i * step)]); }
@@ -1230,7 +1286,7 @@ How to behave in chat:
   function buildSettings() {
     $('#apiKey').value = AI.getKey();
     const ms = $('#apiModel'); ms.innerHTML = AI.MODELS.map(m => `<option value="${m.id}" ${m.id === settings.model ? 'selected' : ''}>${esc(m.name)}</option>`).join('');
-    $('#brandLine1').value = settings.brand.line1 || ''; $('#brandLine2').value = settings.brand.line2 || ''; $('#brandSite').value = settings.brand.site || '';
+    $('#brandSite').value = settings.brand.site || '';
     $('#brandLogoPreview').hidden = !settings.brand.logoData; $('#brandLogoRemove').hidden = !settings.brand.logoData; if (settings.brand.logoData) $('#brandLogoPreview').src = settings.brand.logoData;
     $('#exportScale').value = String(settings.exportScale || 1); $('#showHints').checked = settings.showHints !== false; $('#autoLabels').checked = settings.autoLabels !== false;
     buildTypeList();
@@ -1239,8 +1295,8 @@ How to behave in chat:
   $('#apiModel').onchange = () => { settings.model = $('#apiModel').value; saveSettings(); };
   $('#apiClear').onclick = () => { AI.setKey(''); $('#apiKey').value = ''; $('#apiStatus').textContent = 'Key removed.'; };
   $('#apiTest').onclick = async () => { const k = $('#apiKey').value.trim(); if (k && k !== AI.getKey()) AI.setKey(k); $('#apiStatus').textContent = 'Testing…'; try { await AI.testKey($('#apiModel').value); $('#apiStatus').textContent = '✓ Connected to Claude.'; toast('Connection OK', 'ok'); } catch (e) { $('#apiStatus').textContent = '✗ ' + e.message; } };
-  ['brandLine1', 'brandLine2', 'brandSite'].forEach(id => $('#' + id).addEventListener('input', e => { settings.brand[id.replace('brand', '').replace(/^L/, 'l').replace(/^S/, 's')] = e.target.value; saveSettings(); render(); }));
-  $('#brandLogo').addEventListener('change', ev => { const f = ev.target.files[0]; if (!f) return; if (f.size > 1500000) return toast('Logo must be under 1.5 MB', 'warn'); const r = new FileReader(); r.onload = () => { settings.brand.logoData = r.result; saveSettings(); buildSettings(); render(); toast('Logo updated', 'ok'); }; r.readAsDataURL(f); ev.target.value = ''; });
+  $('#brandSite').addEventListener('input', e => { settings.brand.site = e.target.value; saveSettings(); render(); });
+  $('#brandLogo').addEventListener('change', ev => { const f = ev.target.files[0]; if (!f) return; if (f.size > 1500000) return toast('Logo must be under 1.5 MB', 'warn'); const r = new FileReader(); r.onload = () => { const im = new Image(); im.onload = () => { settings.brand.logoData = r.result; settings.brand.logoRatio = im.naturalWidth / im.naturalHeight; saveSettings(); buildSettings(); render(); toast('Logo updated', 'ok'); }; im.src = r.result; }; r.readAsDataURL(f); ev.target.value = ''; });
   $('#brandLogoRemove').onclick = () => { settings.brand.logoData = null; saveSettings(); buildSettings(); render(); };
   $('#exportScale').onchange = e => { settings.exportScale = +e.target.value; saveSettings(); };
   $('#showHints').onchange = e => { settings.showHints = e.target.checked; saveSettings(); setHint(); };
@@ -1264,7 +1320,7 @@ How to behave in chat:
   function openTypeEditor(t) {
     editingType = t;
     $('#typeDialogTitle').textContent = settings.customTypes.some(x => x.id === t.id) ? 'Edit map type' : 'New map type';
-    $('#tName').value = t.name || ''; $('#tShort').value = t.short || ''; $('#tBase').value = t.base || 'white'; $('#tTitle').value = t.titleMode || 'none'; $('#tLegend').value = t.legend || 'levels'; $('#tLabels').value = t.labels || 'arrow'; $('#tCatLabel').value = t.categoryLabel || ''; $('#tHazards').checked = !!t.hazards;
+    $('#tName').value = t.name || ''; $('#tShort').value = t.short || ''; $('#tBase').value = t.base || 'white'; $('#tTitle').value = (t.titleMode && t.titleMode !== 'none') ? 'heading' : 'none'; $('#tLegend').value = (t.legend === 'levels' || t.legend === 'panel') ? 'card' : (t.legend || 'card'); $('#tLabels').value = t.labels || 'arrow'; $('#tCatLabel').value = t.categoryLabel || ''; $('#tHazards').checked = !!t.hazards;
     renderCatRows(t.categories || []);
     $('#typeDialog').showModal();
   }
@@ -1299,15 +1355,15 @@ How to behave in chat:
     settings.customTypes = settings.customTypes.filter(x => x.id !== t.id).concat([t]); saveSettings();
     $('#typeDialog').close(); buildTypeList(); buildTypeTabs(); toast('Map type saved', 'ok', { label: 'Use it', fn: () => { showView('standard'); switchType(t.id); } });
   });
-  $('#typeNew').onclick = () => openTypeEditor({ name: '', short: '', base: 'white', titleMode: 'heading', legend: 'levels', labels: 'arrow', hazards: false, categoryLabel: 'Level', categories: [{ id: 'low', name: 'Low', color: '#FFF04A', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }, { id: 'moderate', name: 'Moderate', color: '#F9A447', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }, { id: 'high', name: 'High', color: '#F03B2E', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }] });
+  $('#typeNew').onclick = () => openTypeEditor({ name: '', short: '', base: 'white', titleMode: 'heading', legend: 'card', labels: 'arrow', hazards: false, categoryLabel: 'Level', categories: [{ id: 'low', name: 'Low', color: '#FFF04A', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }, { id: 'moderate', name: 'Moderate', color: '#F9A447', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }, { id: 'high', name: 'High', color: '#F03B2E', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }] });
   $('#typeAI').onclick = () => { if (!AI.getKey()) return toast('Save your Claude API key first', 'warn'); $('#aiTypeStatus').textContent = ''; $('#aiTypeDialog').showModal(); };
   $('#aiTypeCancel').onclick = () => $('#aiTypeDialog').close();
   $('#aiTypeGo').onclick = async () => {
     const p = $('#aiTypePrompt').value.trim(); if (!p) return;
     $('#aiTypeStatus').textContent = 'Asking Claude…'; $('#aiTypeGo').disabled = true;
-    const schema = { type: 'object', additionalProperties: false, required: ['name', 'short', 'base', 'titleMode', 'legend', 'labels', 'hazards', 'categoryLabel', 'categories', 'description'], properties: { name: { type: 'string' }, short: { type: 'string' }, description: { type: 'string' }, base: { type: 'string', enum: ['white', 'terrain'] }, titleMode: { type: 'string', enum: ['none', 'heading', 'climate', 'bar'] }, legend: { type: 'string', enum: ['levels', 'pills', 'panel', 'none'] }, labels: { type: 'string', enum: ['arrow', 'number', 'optional', 'none'] }, hazards: { type: 'boolean' }, categoryLabel: { type: 'string' }, categories: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'color', 'opacity', 'outline'], properties: { name: { type: 'string' }, color: { type: 'string', description: '6-digit hex' }, opacity: { type: 'number' }, outline: { type: 'boolean' }, suffix: { type: 'string' } } } } } };
+    const schema = { type: 'object', additionalProperties: false, required: ['name', 'short', 'base', 'titleMode', 'legend', 'labels', 'hazards', 'categoryLabel', 'categories', 'description'], properties: { name: { type: 'string' }, short: { type: 'string' }, description: { type: 'string' }, base: { type: 'string', enum: ['white', 'terrain'] }, titleMode: { type: 'string', enum: ['none', 'heading'] }, legend: { type: 'string', enum: ['card', 'pills', 'none'] }, labels: { type: 'string', enum: ['arrow', 'number', 'optional', 'none'] }, hazards: { type: 'boolean' }, categoryLabel: { type: 'string' }, categories: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'color', 'opacity', 'outline'], properties: { name: { type: 'string' }, color: { type: 'string', description: '6-digit hex' }, opacity: { type: 'number' }, outline: { type: 'boolean' }, suffix: { type: 'string' } } } } } };
     try {
-      const t = await AI.json({ system: 'You design map templates for a New Zealand weather agency\'s map tool. Return a template definition. Colours must be 6-digit hex, ordered from least to most severe, distinct and readable over a grey or green land base (opacities 0.55–0.92). "levels" legend = rounded card with chips (best for 2–4 ordered classes); "pills" = row of colour pills along the bottom (best for 5 classes); "panel" = white panel bottom-right listing hazards (use with "number" labels). "arrow" labels put text with an arrow beside each area. Keep names short.', messages: [{ role: 'user', content: p }], schema, model: settings.model });
+      const t = await AI.json({ system: 'You design map templates for a New Zealand weather agency\'s map tool. Return a template definition. Colours must be 6-digit hex, ordered from least to most severe, distinct and readable over a grey or green land base (opacities 0.55–0.92). "card" legend = the agency\'s standard rounded legend card with colour chips (use this unless asked otherwise); "pills" = row of colour pills along the bottom. titleMode "heading" puts a title top-right. "arrow" labels put text with an arrow beside each area; "number" labels put numbered badges. Keep names short.', messages: [{ role: 'user', content: p }], schema, model: settings.model });
       const cats = (t.categories || []).map((c, i) => ({ id: fold(c.name).replace(/ /g, '_') || 'c' + i, name: c.name, color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#60A5FA', opacity: clamp(+c.opacity || 0.88, 0.1, 1), stroke: c.outline ? '#111111' : 'none', strokeWidth: c.outline ? 3 : 0, suffix: c.suffix || undefined }));
       $('#aiTypeDialog').close(); $('#aiTypeGo').disabled = false;
       openTypeEditor({ id: 'custom_' + uid(), builtin: false, name: t.name, short: t.short, description: t.description, base: t.base, titleMode: t.titleMode, legend: t.legend, labels: t.labels, hazards: !!t.hazards, categoryLabel: t.categoryLabel, categories: cats, footer: t.name });

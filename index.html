@@ -4,15 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SIMA Map Studio</title>
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon.png" type="image/png">
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
-    <svg class="brand-mark" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="bm" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="#3D9BE9"/><stop offset="1" stop-color="#0E3B6E"/></linearGradient><mask id="bmm"><rect x="-10" y="-10" width="120" height="120" fill="#fff"/><circle cx="72" cy="38" r="26" fill="#000"/></mask></defs><circle cx="50" cy="62" r="38" fill="url(#bm)" mask="url(#bmm)"/><path d="M36 4C36 4 24 20 24 28a12 12 0 0 0 24 0C48 20 36 4 36 4Z" fill="#2E8FD8"/><path d="M66 12C66 12 56 24 56 31a10 10 0 0 0 20 0C76 24 66 12 66 12Z" fill="#2E8FD8"/></svg>
-    <div><div class="brand-title">SIMA Map Studio</div><div class="brand-sub">South Island Meteorological Agency</div></div>
+    <img class="brand-logo" src="assets/logo.png" alt="South Island Met Agency">
+    <div class="brand-title">Map Studio</div>
+  </div>
   </div>
   <nav class="tabs" role="tablist">
     <button class="tab active" data-view="standard">Standard</button>
@@ -155,11 +156,10 @@
       </div>
       <div class="card">
         <h3>Branding</h3>
-        <label class="field"><span>Line 1</span><input id="brandLine1"></label>
-        <label class="field"><span>Line 2</span><input id="brandLine2"></label>
-        <label class="field"><span>Website</span><input id="brandSite"></label>
-        <label class="field"><span>Custom logo (PNG/SVG, optional)</span><input type="file" id="brandLogo" accept="image/*"></label>
-        <div class="row"><img id="brandLogoPreview" alt="" class="logo-preview" hidden><button class="btn ghost" id="brandLogoRemove" hidden>Remove logo</button></div>
+        <p class="muted small">Maps use the SIMA logo. Upload a different file here if the logo changes; it is used everywhere at once.</p>
+        <label class="field"><span>Website shown on maps</span><input id="brandSite"></label>
+        <label class="field"><span>Replace logo (PNG/SVG, optional)</span><input type="file" id="brandLogo" accept="image/*"></label>
+        <div class="row"><img id="brandLogoPreview" alt="" class="logo-preview" hidden><button class="btn ghost" id="brandLogoRemove" hidden>Use the standard SIMA logo</button></div>
       </div>
       <div class="card">
         <h3>Export &amp; editor</h3>
@@ -197,8 +197,8 @@
       <label class="field"><span>Name</span><input id="tName" required></label>
       <label class="field"><span>Short tab name</span><input id="tShort" required></label>
       <label class="field"><span>Base map</span><select id="tBase"><option value="white">White (regions in grey)</option><option value="terrain">Terrain (blue ocean, green land)</option></select></label>
-      <label class="field"><span>Title style</span><select id="tTitle"><option value="none">Logo only</option><option value="heading">Logo + heading</option><option value="climate">Large heading (climate style)</option><option value="bar">White title bar (risks style)</option></select></label>
-      <label class="field"><span>Legend</span><select id="tLegend"><option value="levels">Risk level card</option><option value="pills">Colour pills along the bottom</option><option value="panel">Hazard panel (bottom right)</option><option value="none">None</option></select></label>
+      <label class="field"><span>Title style</span><select id="tTitle"><option value="none">Logo only</option><option value="heading">Logo + heading (top right)</option></select></label>
+      <label class="field"><span>Legend</span><select id="tLegend"><option value="card">Legend card (standard)</option><option value="pills">Colour pills along the bottom</option><option value="none">None</option></select></label>
       <label class="field"><span>Area labels</span><select id="tLabels"><option value="arrow">Text + arrow</option><option value="number">Numbered badges</option><option value="optional">Optional text + arrow</option><option value="none">None</option></select></label>
       <label class="field"><span>Category label</span><input id="tCatLabel" placeholder="Risk level"></label>
       <label class="check"><input type="checkbox" id="tHazards"> Hazard chips (Heavy Rain, Gales …)</label>
@@ -229,6 +229,7 @@
 
 <script src="data/nz-geo.js"></script>
 <script src="data/zones.js"></script>
+<script src="assets/logo.js"></script>
 <script src="js/geo.js"></script>
 <script src="js/icons.js"></script>
 <script src="js/templates.js"></script>
