@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIMA Map Studio</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 100 100" aria-hidden="true"><defs><linearGradient id="bm" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="#3D9BE9"/><stop offset="1" stop-color="#0E3B6E"/></linearGradient><mask id="bmm"><rect x="-10" y="-10" width="120" height="120" fill="#fff"/><circle cx="72" cy="38" r="26" fill="#000"/></mask></defs><circle cx="50" cy="62" r="38" fill="url(#bm)" mask="url(#bmm)"/><path d="M36 4C36 4 24 20 24 28a12 12 0 0 0 24 0C48 20 36 4 36 4Z" fill="#2E8FD8"/><path d="M66 12C66 12 56 24 56 31a10 10 0 0 0 20 0C76 24 66 12 66 12Z" fill="#2E8FD8"/></svg>
+    <div><div class="brand-title">SIMA Map Studio</div><div class="brand-sub">South Island Meteorological Agency</div></div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-view="standard">Standard</button>
+    <button class="tab" data-view="ai">AI Map Creation</button>
+    <button class="tab" data-view="settings">Settings</button>
+  </nav>
+  <div class="topbar-actions">
+    <button class="btn ghost icon" id="btnUndo" title="Undo (Ctrl+Z)">↶</button>
+    <button class="btn ghost icon" id="btnRedo" title="Redo (Ctrl+Y)">↷</button>
+    <span class="divider"></span>
+    <button class="btn ghost" id="btnNew">New</button>
+    <button class="btn ghost" id="btnOpen">Open</button>
+    <button class="btn ghost" id="btnSave">Save</button>
+    <div class="menu-wrap">
+      <button class="btn primary" id="btnExport">Export ▾</button>
+      <div class="menu" id="exportMenu" hidden>
+        <button data-export="png">Download PNG</button>
+        <button data-export="png2">Download PNG (2× resolution)</button>
+        <button data-export="jpg">Download JPG</button>
+        <button data-export="svg">Download SVG (vector)</button>
+        <button data-export="copy">Copy PNG to clipboard</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- ============ STANDARD VIEW ============ -->
+  <section id="view-standard" class="view">
+    <aside class="panel left">
+      <div class="panel-section">
+        <h3>Template</h3>
+        <div class="seg" id="typeTabs"></div>
+        <p class="muted small" id="typeDesc"></p>
+      </div>
+      <div class="panel-section">
+        <h3>Tools</h3>
+        <div class="tool-grid">
+          <button class="tool active" data-tool="select" title="Select / move (V)"><i>⬚</i>Select<span class="kbd">V</span></button>
+          <button class="tool" data-tool="draw" title="Draw risk area (D)"><i>✎</i>Risk area<span class="kbd">D</span></button>
+          <button class="tool" data-tool="text" title="Text box (T)"><i>T</i>Text<span class="kbd">T</span></button>
+          <button class="tool" data-tool="line" title="Arrow / line (L)"><i>➚</i>Arrow<span class="kbd">L</span></button>
+          <button class="tool" data-tool="box" title="Box (B)"><i>▭</i>Box<span class="kbd">B</span></button>
+          <button class="tool" data-tool="icon" title="Weather icon (I)"><i>☂</i>Icon<span class="kbd">I</span></button>
+        </div>
+        <div id="iconTray" class="icon-tray" hidden></div>
+        <p class="muted small" id="toolHelp"></p>
+      </div>
+      <div class="panel-section" id="metaSection">
+        <h3>Map details</h3>
+        <div id="metaForm"></div>
+      </div>
+      <div class="panel-section">
+        <h3>Framing</h3>
+        <label class="field"><span>View</span>
+          <select id="framePreset">
+            <option value="south">South Island</option>
+            <option value="southNorth">South Island + lower North</option>
+            <option value="lowerSouth">Lower South Island</option>
+            <option value="upperSouth">Upper South Island</option>
+            <option value="nz">All of New Zealand</option>
+          </select></label>
+        <label class="field"><span>Map scale <output id="zoomOut">100%</output></span><input type="range" id="frameZoom" min="0.6" max="1.8" step="0.02" value="1"></label>
+        <div class="nudge">
+          <span>Shift map</span>
+          <button data-pan="0,-40">↑</button><button data-pan="0,40">↓</button><button data-pan="-40,0">←</button><button data-pan="40,0">→</button>
+          <button data-pan="reset" class="ghost">Reset</button>
+        </div>
+      </div>
+      <div class="panel-section">
+        <h3>Layers</h3>
+        <label class="check"><input type="checkbox" id="layerCities"> City labels</label>
+        <label class="check"><input type="checkbox" id="layerLakes" checked> Lakes</label>
+        <label class="check"><input type="checkbox" id="layerBorders" checked> Region boundaries</label>
+        <label class="check"><input type="checkbox" id="layerGraticule" checked> Faint grid</label>
+      </div>
+    </aside>
+
+    <div class="canvas-col">
+      <div class="canvas-wrap" id="canvasWrap">
+        <div class="viewport" id="viewport">
+          <svg id="map" viewBox="0 0 2000 1650" xmlns="http://www.w3.org/2000/svg"></svg>
+        </div>
+        <div id="picker" class="picker" hidden></div>
+        <div class="zoombar">
+          <button id="zoomOutBtn" title="Zoom out (-)">−</button>
+          <button id="zoomFit" title="Fit to window (0)">Fit</button>
+          <button id="zoomInBtn" title="Zoom in (+)">+</button>
+          <span id="zoomPct">100%</span>
+        </div>
+      </div>
+      <div class="hintbar" id="hintbar"></div>
+    </div>
+
+    <aside class="panel right" id="rightPanel">
+      <div id="inspector"></div>
+    </aside>
+  </section>
+
+  <!-- ============ AI VIEW ============ -->
+  <section id="view-ai" class="view" hidden>
+    <aside class="panel ai-col">
+      <div class="panel-section">
+        <h3>AI Produced SWO Map Creation</h3>
+        <p class="muted small">Paste your written risk levels, e.g. “Enhanced risk of heavy rain and snow above 500 m for Westland, Fiordland and the Southern Alps; slight risk of severe southerly gales along the Canterbury and Otago coasts”. Claude asks anything it needs, confirms its understanding, and plots the areas when you press <b>Plot on map</b>.</p>
+        <label class="field"><span>Template</span><select id="aiType"></select></label>
+      </div>
+      <div class="chat" id="chat"></div>
+      <div class="chat-input">
+        <textarea id="chatText" rows="4" placeholder="Describe the risk areas, or ask a question…  (Enter to send, Shift+Enter for a new line)"></textarea>
+        <div class="chat-actions">
+          <button class="btn ghost" id="chatClear">New conversation</button>
+          <span class="spacer"></span>
+          <button class="btn" id="chatSend">Send</button>
+          <button class="btn primary" id="chatPlot">Plot on map</button>
+        </div>
+        <p class="muted small" id="aiStatus"></p>
+      </div>
+    </aside>
+    <div class="canvas-col" id="aiCanvasCol">
+      <div class="canvas-wrap" id="aiCanvasHost"></div>
+      <div class="hintbar">Preview updates when areas are plotted. Switch to <b>Standard</b> to fine-tune shapes, labels and levels.</div>
+    </div>
+  </section>
+
+  <!-- ============ SETTINGS VIEW ============ -->
+  <section id="view-settings" class="view settings" hidden>
+    <div class="settings-grid">
+      <div class="card">
+        <h3>Claude API</h3>
+        <p class="muted small">Your key is stored in a cookie on this device only and is sent directly from your browser to Anthropic. It never passes through any other server.</p>
+        <label class="field"><span>API key</span><input type="password" id="apiKey" placeholder="sk-ant-…" autocomplete="off"></label>
+        <label class="field"><span>Model</span><select id="apiModel"></select></label>
+        <div class="row">
+          <button class="btn primary" id="apiSave">Save key</button>
+          <button class="btn" id="apiTest">Test connection</button>
+          <button class="btn ghost" id="apiClear">Remove key</button>
+          <span class="muted small" id="apiStatus"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Branding</h3>
+        <label class="field"><span>Line 1</span><input id="brandLine1"></label>
+        <label class="field"><span>Line 2</span><input id="brandLine2"></label>
+        <label class="field"><span>Website</span><input id="brandSite"></label>
+        <label class="field"><span>Custom logo (PNG/SVG, optional)</span><input type="file" id="brandLogo" accept="image/*"></label>
+        <div class="row"><img id="brandLogoPreview" alt="" class="logo-preview" hidden><button class="btn ghost" id="brandLogoRemove" hidden>Remove logo</button></div>
+      </div>
+      <div class="card">
+        <h3>Export &amp; editor</h3>
+        <label class="field"><span>Default PNG scale</span>
+          <select id="exportScale"><option value="1">1× (2000 × 1650)</option><option value="2">2× (4000 × 3300)</option></select></label>
+        <label class="check"><input type="checkbox" id="showHints" checked> Show hints bar under the map</label>
+        <label class="check"><input type="checkbox" id="autoLabels" checked> Add a label automatically when an area is finished</label>
+      </div>
+      <div class="card wide">
+        <div class="row between">
+          <h3>Map types</h3>
+          <div class="row">
+            <button class="btn" id="typeNew">New map type</button>
+            <button class="btn primary" id="typeAI">Create with Claude</button>
+          </div>
+        </div>
+        <p class="muted small">Built-in templates can be duplicated and adjusted. Custom types get their own tab in the Standard view and are available in AI Map Creation.</p>
+        <div id="typeList" class="type-list"></div>
+      </div>
+      <div class="card wide">
+        <h3>Data</h3>
+        <div class="row">
+          <button class="btn ghost" id="dataReset">Reset current map</button>
+          <button class="btn ghost" id="dataWipe">Clear all saved data on this device</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="typeDialog" class="dialog">
+  <form method="dialog" id="typeForm">
+    <h3 id="typeDialogTitle">Map type</h3>
+    <div class="grid2">
+      <label class="field"><span>Name</span><input id="tName" required></label>
+      <label class="field"><span>Short tab name</span><input id="tShort" required></label>
+      <label class="field"><span>Base map</span><select id="tBase"><option value="white">White (regions in grey)</option><option value="terrain">Terrain (blue ocean, green land)</option></select></label>
+      <label class="field"><span>Title style</span><select id="tTitle"><option value="none">Logo only</option><option value="heading">Logo + heading</option><option value="climate">Large heading (climate style)</option><option value="bar">White title bar (risks style)</option></select></label>
+      <label class="field"><span>Legend</span><select id="tLegend"><option value="levels">Risk level card</option><option value="pills">Colour pills along the bottom</option><option value="panel">Hazard panel (bottom right)</option><option value="none">None</option></select></label>
+      <label class="field"><span>Area labels</span><select id="tLabels"><option value="arrow">Text + arrow</option><option value="number">Numbered badges</option><option value="optional">Optional text + arrow</option><option value="none">None</option></select></label>
+      <label class="field"><span>Category label</span><input id="tCatLabel" placeholder="Risk level"></label>
+      <label class="check"><input type="checkbox" id="tHazards"> Hazard chips (Heavy Rain, Gales …)</label>
+    </div>
+    <h4>Categories</h4>
+    <div id="tCats"></div>
+    <button type="button" class="btn ghost" id="tAddCat">+ Add category</button>
+    <div class="row end">
+      <button type="button" class="btn ghost" id="tCancel">Cancel</button>
+      <button type="submit" class="btn primary">Save map type</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="aiTypeDialog" class="dialog">
+  <h3>Create a map type with Claude</h3>
+  <p class="muted small">Describe the map you want, for example: “A seasonal fire danger map with four classes from low to extreme on the white South Island base, with a legend card and numbered areas”.</p>
+  <textarea id="aiTypePrompt" rows="5"></textarea>
+  <p class="muted small" id="aiTypeStatus"></p>
+  <div class="row end">
+    <button class="btn ghost" id="aiTypeCancel">Cancel</button>
+    <button class="btn primary" id="aiTypeGo">Generate</button>
+  </div>
+</dialog>
+
+<input type="file" id="openFile" accept="application/json" hidden>
+<div id="toasts"></div>
+
+<script src="data/nz-geo.js"></script>
+<script src="data/zones.js"></script>
+<script src="js/geo.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/templates.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
