@@ -185,7 +185,7 @@
     const terrain = type.base === 'terrain';
     const L = state.layers;
     if (!terrain && L.graticule) {
-      const gr = el('g', { stroke: '#EDF1F6', 'stroke-width': 2 }, g);
+      const gr = el('g', { stroke: '#F1F4F8', 'stroke-width': 2 }, g);
       for (let lon = 160; lon <= 182; lon += 2) { const a = toXY(lon, -30), b = toXY(lon, -52); el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y }, gr); }
       for (let lat = -52; lat <= -30; lat += 2) { const a = toXY(160, lat), b = toXY(182, lat); el('line', { x1: a.x, y1: a.y, x2: b.x, y2: b.y }, gr); }
     }
@@ -198,7 +198,7 @@
       regionPaths.forEach(p => el('path', { d: p.d, fill: 'url(#landGrad)', stroke: L.borders ? '#F8FAFC' : 'none', 'stroke-width': 2, 'stroke-opacity': 0.55, 'stroke-linejoin': 'round' }, land));
       regionPaths.forEach(p => el('path', { d: p.d, fill: 'none', stroke: '#2E4D2B', 'stroke-width': 1.5, 'stroke-opacity': 0.5 }, land));
     } else {
-      regionPaths.forEach(p => el('path', { d: p.d, fill: '#E7E8EA', stroke: L.borders ? '#8E949C' : '#C9CDD3', 'stroke-width': L.borders ? 2.2 : 1.5, 'stroke-linejoin': 'round' }, land));
+      regionPaths.forEach(p => el('path', { d: p.d, fill: '#E8E9EB', stroke: L.borders ? '#848B94' : '#B8BEC6', 'stroke-width': L.borders ? 2.4 : 1.8, 'stroke-linejoin': 'round' }, land));
     }
     if (L.lakes) {
       NZ_GEO.lakes.forEach(lk => el('path', { d: Geo.ringToPath(lk.ring, frame, W, H), fill: terrain ? '#2E7CC4' : '#ffffff', stroke: terrain ? '#1C5A95' : 'none', 'stroke-width': 1.5 }, land));
@@ -1089,9 +1089,17 @@ How to behave in chat:
     try {
       const sys = aiSystemPrompt(type) + `\n\nPLOTTING MODE: Produce the final plan as JSON for the app. For each area pick the category id, hazards, and the zones/regions it covers (use names from the lists; prefer regional councils when the forecaster names a whole region, otherwise forecast zones). Express relative wording with the modifiers: "south of Gore" -> cuts [{ref:"Gore", side:"south"}] on the zones/region mentioned (or on the whole South Island if none was named); "coastal Otago" -> zones ["Otago"], band "coastal"; "inland Canterbury" -> band "inland"; "north of Rolleston" -> cuts [{ref:"Rolleston", side:"north"}]. Combine several cuts for "between Timaru and Oamaru" (south of Timaru + north of Oamaru). Use clip "coast" for gales, swell and other marine hazards that extend offshore, "land" otherwise. Add "points" only for extents the zones and modifiers cannot express, or set mode "points" with a full 8–16 point outline when nothing fits. Set smooth to false only if the forecaster asked for sharp edges. Order areas from lowest to highest category so higher levels draw on top.`;
       const msgs = history.map(m => ({ role: m.role, content: m.content })).concat([{ role: 'user', content: 'Plot the areas now. Output the JSON plan only.' }]);
-      const plan = await AI.json({ system: sys, messages: msgs, schema: PLAN_SCHEMA, model: settings.model });
+      let plan = await AI.json({ system: sys, messages: msgs, schema: PLAN_SCHEMA, model: settings.model });
+      // dry run: find areas that cannot be placed and ask Claude to repair them once
+      const dry = dryRunPlan(plan, type);
+      if (dry.problems.length) {
+        $('#aiStatus').textContent = 'Fixing ' + dry.problems.length + ' area' + (dry.problems.length > 1 ? 's' : '') + ' that could not be placed…';
+        const fixMsg = 'Your plan could not be placed for these areas:\n' + dry.problems.map(p => `- area ${p.index + 1} (category ${p.category}): ${p.reason}`).join('\n') + '\nEvery area must name at least one zone or regional council from the lists (exact names), or give a full outline in "points" with mode "points". Output the complete corrected JSON plan.';
+        plan = await AI.json({ system: sys, messages: msgs.concat([{ role: 'assistant', content: JSON.stringify(plan) }, { role: 'user', content: fixMsg }]), schema: PLAN_SCHEMA, model: settings.model });
+      }
       const result = applyPlan(plan, type);
-      pushChat('system', `Plotted ${result.count} area${result.count === 1 ? '' : 's'}.` + (result.skipped.length ? ` Could not resolve: ${result.skipped.join(', ')}.` : '') + (plan.notes ? ` ${plan.notes}` : ''));
+      const left = result.problems.filter(p => p.reason);
+      pushChat('system', `Plotted ${result.count} area${result.count === 1 ? '' : 's'}.` + (result.skipped.length ? ` Could not resolve: ${result.skipped.join(', ')}.` : '') + (left.length ? ` ${left.length} area${left.length > 1 ? 's' : ''} could not be placed — tell me where ${left.length > 1 ? 'they go' : 'it goes'} and press Plot again.` : '') + (plan.notes ? ` ${plan.notes}` : ''));
       toast('Areas plotted — fine-tune them in Standard', 'ok', { label: 'Open Standard', fn: () => showView('standard') });
     } catch (e) { pushChat('assistant', 'Error: ' + e.message, { error: true }); }
     aiBusy = false; $('#aiStatus').textContent = ''; $('#chatSend').disabled = false; $('#chatPlot').disabled = false;
@@ -1113,18 +1121,38 @@ How to behave in chat:
     landPolysKey = key; landPolysCache = NZ_GEO.regions.flatMap(r => r.rings.filter(rg => rg.length > 12).map(rg => rg.map(q => toXY(q[0], q[1]))));
     return landPolysCache;
   }
+  const STOP = new Set(['the', 'of', 'and', 'region', 'regions', 'district', 'districts', 'area', 'areas', 'coast', 'coastal', 'coasts', 'plains', 'ranges', 'range', 'inland', 'national', 'park', 'city', 'town', 'northern', 'southern', 'eastern', 'western', 'north', 'south', 'east', 'west', 'central', 'upper', 'lower', 'lakes', 'lake', 'valley', 'basin', 'country', 'high']);
   function zonePolysFor(name) {
     const n = fold(name);
-    if (/^(the )?(whole )?south island$/.test(n) || n === 'te waipounamu') return NZ_GEO.regions.filter(r => r.island === 'S').flatMap(r => r.rings.filter(rg => rg.length > 12).map(rg => rg.filter((p, i) => i % 2 === 0)));
-    if (/^(the )?(whole )?north island$/.test(n)) return NZ_GEO.regions.filter(r => r.island === 'N').flatMap(r => r.rings.filter(rg => rg.length > 12).map(rg => rg.filter((p, i) => i % 2 === 0)));
-    const reg = NZ_GEO.regions.find(r => { const f = fold(r.name); return f === n || f.replace(/ (district|city|regional council)$/, '') === n || (n === f.split(' ')[0] && f.length - n.length < 10 && !/^(west|bay)$/.test(n)); });
-    if (reg) return reg.rings.filter(r => r.length > 12).map(r => r.filter((p, i) => i % 2 === 0));
-    const z = NZ_ZONES.find(z => fold(z.name) === n || (z.aliases || []).some(a => fold(a) === n));
+    if (!n) return null;
+    const regionRings = r => r.rings.filter(rg => rg.length > 12).map(rg => rg.filter((p, i) => i % 2 === 0));
+    if (/^(the )?(whole |entire )?south island$/.test(n) || n === 'te waipounamu' || n === 'whole island' || n === 'island wide') return NZ_GEO.regions.filter(r => r.island === 'S').flatMap(regionRings);
+    if (/^(the )?(whole |entire )?north island$/.test(n)) return NZ_GEO.regions.filter(r => r.island === 'N').flatMap(regionRings);
+    const regName = r => fold(r.name).replace(/ (district|city|regional council)$/, '');
+    // 1. exact region / zone / alias
+    let reg = NZ_GEO.regions.find(r => fold(r.name) === n || regName(r) === n);
+    if (reg) return regionRings(reg);
+    let z = NZ_ZONES.find(z => fold(z.name) === n || (z.aliases || []).some(a => fold(a) === n));
     if (z) return [z.pts];
-    const z2 = NZ_ZONES.find(z => fold(z.name).includes(n) || n.includes(fold(z.name)) || (z.aliases || []).some(a => fold(a).includes(n) || n.includes(fold(a))));
-    if (z2) return [z2.pts];
+    // 2. zone group ("West Coast" group, "Marine", "Alpine")
     const grp = NZ_ZONES.filter(z => fold(z.group) === n);
     if (grp.length) return grp.map(z => z.pts);
+    // 3. substring either way
+    z = NZ_ZONES.find(z => fold(z.name).includes(n) || n.includes(fold(z.name)) || (z.aliases || []).some(a => fold(a).includes(n) || n.includes(fold(a))));
+    if (z) return [z.pts];
+    reg = NZ_GEO.regions.find(r => n.includes(regName(r)) || regName(r).includes(n));
+    if (reg) return regionRings(reg);
+    // 4. significant tokens ("Canterbury Plains" -> Canterbury, "Fiordland National Park" -> Fiordland)
+    const toks = n.split(' ').filter(t => t.length > 2 && !STOP.has(t));
+    for (const t of toks) {
+      reg = NZ_GEO.regions.find(r => regName(r).split(' ').includes(t));
+      if (reg) return regionRings(reg);
+      z = NZ_ZONES.find(z => fold(z.name).split(' ').includes(t) || (z.aliases || []).some(a => fold(a).split(' ').includes(t)));
+      if (z) return [z.pts];
+    }
+    // 5. a town name: a small circle around it
+    const pl = NZ_GEO.places.find(q => fold(q.name) === n) || (toks.length ? NZ_GEO.places.find(q => toks.includes(fold(q.name))) : null);
+    if (pl) { const r = 0.25; return [Array.from({ length: 12 }, (_, i) => [pl.lon + r * 1.4 * Math.cos((i / 12) * 2 * Math.PI), pl.lat + r * Math.sin((i / 12) * 2 * Math.PI)])]; }
     return null;
   }
   function convexHull(pts) {
@@ -1144,7 +1172,7 @@ How to behave in chat:
     const pad = (grow + 14) * cell;
     minX -= pad; minY -= pad; maxX += pad; maxY += pad;
     const cols = Math.ceil((maxX - minX) / cell), rows = Math.ceil((maxY - minY) / cell);
-    if (cols * rows > 400000) return convexHull(polys.flat());
+    if (cols * rows > 400000) return [convexHull(polys.flat())];
     const cellPt = (r, c) => ({ x: minX + (c + 0.5) * cell, y: minY + (r + 0.5) * cell });
     const rasterise = plist => {
       const m = new Uint8Array(cols * rows);
@@ -1185,10 +1213,10 @@ How to behave in chat:
     };
     const base = mask;
     let g = grow, result = null;
-    for (; g <= grow + 10; g += 2) {
+    for (; g <= grow + 2; g += 2) {
       const grown = dil(base, g + 2);
       const comp = components(grown);
-      if (comp.count <= 1 || g >= grow + 10) { result = ero(grown, 2); if (comp.count > 1) { const c2 = components(result); for (let i = 0; i < result.length; i++) result[i] = c2.label[i] === c2.best ? 1 : 0; } break; }
+      if (comp.count <= 1 || g >= grow + 2) { result = ero(grown, 2); break; }
     }
     mask = result;
     // land clipping and coastal / inland bands
@@ -1197,25 +1225,39 @@ How to behave in chat:
       if (mods.band === 'coastal') { const inner = ero(land, 6); const coastal = land.map((v, i) => v && !inner[i] ? 1 : 0); const cz = dil(coastal, 2); for (let i = 0; i < mask.length; i++) if (!cz[i]) mask[i] = 0; }
       else if (mods.band === 'inland') { const inner = ero(land, 5); for (let i = 0; i < mask.length; i++) if (!inner[i]) mask[i] = 0; }
       if (mods.clip !== 'none') { const margin = mods.clip === 'coast' ? 8 : 2; const ld = dil(land, margin); for (let i = 0; i < mask.length; i++) if (!ld[i]) mask[i] = 0; }
-      // soften the clipped edge and keep the largest piece
+      // soften the clipped edge
       mask = dil(ero(mask, 1), 1);
-      const c3 = components(mask); if (c3.count > 1) for (let i = 0; i < mask.length; i++) mask[i] = c3.label[i] === c3.best ? 1 : 0;
     }
-    // Moore-neighbour boundary trace, starting from the top-most left-most cell
+    // Trace every separate piece (zones too far apart to bridge become their
+    // own areas); tiny slivers are dropped.
+    const comp = components(mask);
+    const sizes = {}; for (let i = 0; i < mask.length; i++) if (mask[i]) sizes[comp.label[i]] = (sizes[comp.label[i]] || 0) + 1;
+    const rings = [];
+    const biggest = Math.max(0, ...Object.values(sizes));
+    Object.keys(sizes).sort((a, b) => sizes[b] - sizes[a]).forEach(lab => {
+      if (rings.length && (sizes[lab] < 40 || sizes[lab] < biggest * 0.08)) return;
+      const m = new Uint8Array(mask.length); for (let i = 0; i < mask.length; i++) m[i] = comp.label[i] == lab ? 1 : 0;
+      const ring = traceMask(m, cols, rows, (r, c) => ({ x: minX + (c + 0.5) * cell, y: minY + (r + 0.5) * cell }));
+      if (ring && ring.length >= 3) rings.push(ring);
+    });
+    return rings.length ? rings : [convexHull(polys.flat())];
+  }
+  // Moore-neighbour boundary trace of a binary mask, starting at the top-most left-most cell.
+  function traceMask(mask, cols, rows, pt) {
     const at = (r, c) => r >= 0 && c >= 0 && r < rows && c < cols && mask[r * cols + c] === 1;
     let start = -1; for (let i = 0; i < mask.length; i++) if (mask[i]) { start = i; break; }
-    if (start < 0) return convexHull(polys.flat());
+    if (start < 0) return null;
     const sr = (start / cols) | 0, sc = start % cols;
     const dirs = [[0, 1], [1, 1], [1, 0], [1, -1], [0, -1], [-1, -1], [-1, 0], [-1, 1]]; // E SE S SW W NW N NE (clockwise)
     const ring = []; let r = sr, c = sc, dir = 6, guard = 0;
     do {
-      ring.push({ x: minX + (c + 0.5) * cell, y: minY + (r + 0.5) * cell });
+      ring.push(pt(r, c));
       let found = false;
       for (let k = 0; k < 8; k++) { const d = (dir + 6 + k) % 8; const rr = r + dirs[d][0], cc = c + dirs[d][1]; if (at(rr, cc)) { r = rr; c = cc; dir = d; found = true; break; } }
       if (!found) break;
       guard++;
     } while ((r !== sr || c !== sc) && guard < cols * rows * 4);
-    return ring.length >= 3 ? ring : convexHull(polys.flat());
+    return ring;
   }
   // Ramer–Douglas–Peucker simplification for closed rings.
   function simplifyRing(ring, eps) {
@@ -1234,12 +1276,29 @@ How to behave in chat:
     (function () { let md = 0, mi = -1; for (let i = fi + 1; i < tail.length - 1; i++) { const d = distToSeg(tail[i], tail[fi], tail[tail.length - 1]); if (d > md) { md = d; mi = i; } } if (md > eps && mi > 0) { keep[mi] = 1; const sub = (a, b) => { let m2 = 0, i2 = -1; for (let i = a + 1; i < b; i++) { const d = distToSeg(tail[i], tail[a], tail[b]); if (d > m2) { m2 = d; i2 = i; } } if (m2 > eps && i2 > 0) { keep[i2] = 1; sub(a, i2); sub(i2, b); } }; sub(fi, mi); sub(mi, tail.length - 1); } })();
     return ring.filter((p, i) => keep[i]);
   }
+  function dryRunPlan(plan, type) {
+    const problems = [];
+    (plan.areas || []).forEach((pa, i) => {
+      if (pa.mode === 'points' && pa.points && pa.points.length >= 3) return;
+      const names = (pa.zones || []).slice();
+      if (!names.length && (pa.cuts || []).length) return; // whole island
+      const unknown = names.filter(z => !zonePolysFor(z));
+      const ok = names.length - unknown.length > 0 || (pa.points || []).length >= 3;
+      if (!ok) problems.push({ index: i, category: pa.category, zones: names, reason: names.length ? 'unknown zone names: ' + unknown.join(', ') : 'no zones, regions, places or points given' });
+    });
+    return { problems };
+  }
   function applyPlan(plan, type) {
     type = type || currentType();
     const skipped = [], areas = [];
     computeFrame();
-    (plan.areas || []).forEach(pa => {
-      let cat = type.categories.find(c => c.id === pa.category) || type.categories.find(c => fold(c.name) === fold(pa.category)) || type.categories.find(c => fold(c.name).includes(fold(pa.category)));
+    const problems = [];
+    (plan.areas || []).forEach((pa, i) => {
+      const pc = fold(pa.category || '');
+      let cat = type.categories.find(c => c.id === pa.category) || type.categories.find(c => fold(c.name) === pc) || type.categories.find(c => pc && (fold(c.name).includes(pc) || pc.includes(fold(c.name)) || fold(c.id).includes(pc)));
+      if (!cat && /^(low|minor|slight|yellow)/.test(pc)) cat = type.categories[0];
+      if (!cat && /^(moderate|medium|enhanced|orange|amber)/.test(pc)) cat = type.categories[Math.min(1, type.categories.length - 1)];
+      if (!cat && /^(high|severe|extreme|red|major)/.test(pc)) cat = type.categories[type.categories.length - 1];
       let pts = [];
       const zonePolys = [], extraPts = [];
       const useRaw = pa.mode === 'points' && pa.points && pa.points.length >= 3;
@@ -1250,8 +1309,8 @@ How to behave in chat:
         zoneNames.forEach(z => { const zp = zonePolysFor(z); if (zp) zp.forEach(poly => { const cp = poly.map(q => toXY(q[0], q[1])); zonePolys.push(cp); pts.push(...cp); }); else skipped.push(z); });
         (pa.points || []).forEach(q => { const xy = toXY(q.lon, q.lat); extraPts.push(xy); pts.push(xy); });
       } else pts = pa.points.map(q => toXY(q.lon, q.lat));
-      if (pts.length < 3) { if (!(pa.zones || []).length) skipped.push(pa.category); return; }
-      let outline;
+      if (pts.length < 3) { problems.push({ index: i, category: pa.category, zones: pa.zones || [], reason: zoneNames.length ? 'unknown zone names: ' + zoneNames.join(', ') : 'no zones, regions, places or points given' }); return; }
+      let outline, extraRings = [];
       if (useRaw) outline = pts;
       else {
         // union of the zone polygons (each zone's own outline, plus any extra
@@ -1261,23 +1320,28 @@ How to behave in chat:
         else if (extraPts.length) polys.push(convexHull(extraPts.concat(zonePolys.flat().slice(0, 2))));
         const marine = /gale|swell|wind|inundation|surf|sea/i.test(JSON.stringify(pa.hazards || []) + ' ' + (pa.category || ''));
         const clip = pa.clip || (marine ? 'coast' : 'land');
-        outline = unionOutline(polys, 10, 2, { cuts, band: pa.band || 'none', clip, land: landPolys() });
-        outline = simplifyRing(outline, 16);
-        // cap the number of points so it stays easy to edit by hand
-        const maxPts = 28;
-        if (outline.length > maxPts) { const step = outline.length / maxPts; outline = Array.from({ length: maxPts }, (_, i) => outline[Math.floor(i * step)]); }
+        const rings = unionOutline(polys, 10, 2, { cuts, band: pa.band || 'none', clip, land: landPolys() }).map(rg => {
+          let o = simplifyRing(rg, 16);
+          if (o.length < 6) o = simplifyRing(rg, 6); // small pieces keep their roundness
+          const maxPts = 28; // keep it easy to edit by hand
+          if (o.length > maxPts) { const step = o.length / maxPts; o = Array.from({ length: maxPts }, (_, i) => o[Math.floor(i * step)]); }
+          return o;
+        });
+        outline = rings[0]; extraRings = rings.slice(1);
       }
-      const a = { id: uid(), points: outline.map(p => toLL(p.x, p.y)), category: cat ? cat.id : null, hazards: (pa.hazards || []).map(h => ({ key: h.key, detail: h.detail || '' })), smooth: pa.smooth === false ? 0 : 0.7, label: null, showLabel: type.labels === 'arrow' || type.labels === 'optional', labelText: pa.label || null };
+      [outline].concat(extraRings).forEach(o => {
+        if (o.length < 3) return;
+        areas.push({ id: uid(), points: o.map(p => toLL(p.x, p.y)), category: cat ? cat.id : null, hazards: (pa.hazards || []).map(h => ({ key: h.key, detail: h.detail || '' })), smooth: pa.smooth === false ? 0 : 0.7, label: null, showLabel: type.labels === 'arrow' || type.labels === 'optional', labelText: pa.label || null });
+      });
       if (!cat) skipped.push('category "' + pa.category + '"');
-      areas.push(a);
     });
-    if (!areas.length) throw new Error('No areas could be built from the plan' + (skipped.length ? ' (unknown: ' + skipped.join(', ') + ')' : ''));
+    if (!areas.length) { const err = new Error('None of the areas could be placed. ' + problems.map(p => `Area ${p.index + 1} (${p.category}): ${p.reason}`).join('; ')); err.problems = problems; throw err; }
     snapshot();
     if (state.areas.length && !confirm('Replace the existing areas on the map? Cancel to add the new areas alongside them.')) state.areas.push(...areas); else state.areas = areas;
     if (plan.meta) Object.keys(plan.meta).forEach(k => { if (plan.meta[k]) state.meta[k] = plan.meta[k]; });
     if (plan.title && type.titleMode === 'heading') state.meta.title = plan.title;
     select(null); buildMetaForm(); render(); autosave();
-    return { count: areas.length, skipped: Array.from(new Set(skipped)) };
+    return { count: areas.length, skipped: Array.from(new Set(skipped)), problems };
   }
 
   // =====================================================================
@@ -1334,12 +1398,12 @@ How to behave in chat:
     });
     host._cats = cats;
   }
-  $('#tAddCat').onclick = () => { const cats = readCatRows(); cats.push({ id: 'c' + (cats.length + 1), name: 'New', color: '#60A5FA', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }); renderCatRows(cats); };
+  $('#tAddCat').onclick = () => { const cats = readCatRows(); cats.push({ id: 'c' + (cats.length + 1), name: 'New', color: '#60A5FA', opacity: 0.88, stroke: '#111111', strokeWidth: 10 }); renderCatRows(cats); };
   function readCatRows() {
     return Array.from($('#tCats').querySelectorAll('.cat-row:not(.cat-head)')).map((r, i) => {
       const g = f => r.querySelector(`[data-f="${f}"]`).value;
       const old = ($('#tCats')._cats || [])[i] || {};
-      return { id: old.id || 'c' + (i + 1), name: g('name'), color: g('color'), opacity: +g('opacity'), stroke: g('stroke'), strokeWidth: g('stroke') === 'none' ? 0 : 3, suffix: g('suffix') || undefined };
+      return { id: old.id || 'c' + (i + 1), name: g('name'), color: g('color'), opacity: +g('opacity'), stroke: g('stroke'), strokeWidth: g('stroke') === 'none' ? 0 : 10, suffix: g('suffix') || undefined };
     });
   }
   $('#tCancel').onclick = () => $('#typeDialog').close();
@@ -1355,7 +1419,7 @@ How to behave in chat:
     settings.customTypes = settings.customTypes.filter(x => x.id !== t.id).concat([t]); saveSettings();
     $('#typeDialog').close(); buildTypeList(); buildTypeTabs(); toast('Map type saved', 'ok', { label: 'Use it', fn: () => { showView('standard'); switchType(t.id); } });
   });
-  $('#typeNew').onclick = () => openTypeEditor({ name: '', short: '', base: 'white', titleMode: 'heading', legend: 'card', labels: 'arrow', hazards: false, categoryLabel: 'Level', categories: [{ id: 'low', name: 'Low', color: '#FFF04A', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }, { id: 'moderate', name: 'Moderate', color: '#F9A447', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }, { id: 'high', name: 'High', color: '#F03B2E', opacity: 0.88, stroke: '#111111', strokeWidth: 3 }] });
+  $('#typeNew').onclick = () => openTypeEditor({ name: '', short: '', base: 'white', titleMode: 'heading', legend: 'card', labels: 'arrow', hazards: false, categoryLabel: 'Level', categories: [{ id: 'low', name: 'Low', color: '#FFF04A', opacity: 0.88, stroke: '#111111', strokeWidth: 10 }, { id: 'moderate', name: 'Moderate', color: '#F9A447', opacity: 0.88, stroke: '#111111', strokeWidth: 10 }, { id: 'high', name: 'High', color: '#F03B2E', opacity: 0.88, stroke: '#111111', strokeWidth: 10 }] });
   $('#typeAI').onclick = () => { if (!AI.getKey()) return toast('Save your Claude API key first', 'warn'); $('#aiTypeStatus').textContent = ''; $('#aiTypeDialog').showModal(); };
   $('#aiTypeCancel').onclick = () => $('#aiTypeDialog').close();
   $('#aiTypeGo').onclick = async () => {
@@ -1364,7 +1428,7 @@ How to behave in chat:
     const schema = { type: 'object', additionalProperties: false, required: ['name', 'short', 'base', 'titleMode', 'legend', 'labels', 'hazards', 'categoryLabel', 'categories', 'description'], properties: { name: { type: 'string' }, short: { type: 'string' }, description: { type: 'string' }, base: { type: 'string', enum: ['white', 'terrain'] }, titleMode: { type: 'string', enum: ['none', 'heading'] }, legend: { type: 'string', enum: ['card', 'pills', 'none'] }, labels: { type: 'string', enum: ['arrow', 'number', 'optional', 'none'] }, hazards: { type: 'boolean' }, categoryLabel: { type: 'string' }, categories: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'color', 'opacity', 'outline'], properties: { name: { type: 'string' }, color: { type: 'string', description: '6-digit hex' }, opacity: { type: 'number' }, outline: { type: 'boolean' }, suffix: { type: 'string' } } } } } };
     try {
       const t = await AI.json({ system: 'You design map templates for a New Zealand weather agency\'s map tool. Return a template definition. Colours must be 6-digit hex, ordered from least to most severe, distinct and readable over a grey or green land base (opacities 0.55–0.92). "card" legend = the agency\'s standard rounded legend card with colour chips (use this unless asked otherwise); "pills" = row of colour pills along the bottom. titleMode "heading" puts a title top-right. "arrow" labels put text with an arrow beside each area; "number" labels put numbered badges. Keep names short.', messages: [{ role: 'user', content: p }], schema, model: settings.model });
-      const cats = (t.categories || []).map((c, i) => ({ id: fold(c.name).replace(/ /g, '_') || 'c' + i, name: c.name, color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#60A5FA', opacity: clamp(+c.opacity || 0.88, 0.1, 1), stroke: c.outline ? '#111111' : 'none', strokeWidth: c.outline ? 3 : 0, suffix: c.suffix || undefined }));
+      const cats = (t.categories || []).map((c, i) => ({ id: fold(c.name).replace(/ /g, '_') || 'c' + i, name: c.name, color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#60A5FA', opacity: clamp(+c.opacity || 0.88, 0.1, 1), stroke: c.outline ? '#111111' : 'none', strokeWidth: c.outline ? 10 : 0, suffix: c.suffix || undefined }));
       $('#aiTypeDialog').close(); $('#aiTypeGo').disabled = false;
       openTypeEditor({ id: 'custom_' + uid(), builtin: false, name: t.name, short: t.short, description: t.description, base: t.base, titleMode: t.titleMode, legend: t.legend, labels: t.labels, hazards: !!t.hazards, categoryLabel: t.categoryLabel, categories: cats, footer: t.name });
     } catch (e) { $('#aiTypeStatus').textContent = 'Error: ' + e.message; $('#aiTypeGo').disabled = false; }
@@ -1380,6 +1444,6 @@ How to behave in chat:
     if (!AI.getKey() && !localStorage.getItem('sima.welcomed')) { localStorage.setItem('sima.welcomed', '1'); setTimeout(() => toast('Welcome! Press D and click around an area on the map to start.', 'ok'), 400); }
   }
   // expose a little for debugging / tests
-  window.SIMA = { get state() { return state; }, render, setTool, select, exportImage, applyPlan, switchType, showView, finishDraft: () => finishDraft(), get draft() { return draft; }, addDraftPoint, toXY: (lon, lat) => { computeFrame(); return toXY(lon, lat); }, toLL: (x, y) => { computeFrame(); return toLL(x, y); } };
+  window.SIMA = { get state() { return state; }, resolveZone: n => !!zonePolysFor(n), render, setTool, select, exportImage, applyPlan, switchType, showView, finishDraft: () => finishDraft(), get draft() { return draft; }, addDraftPoint, toXY: (lon, lat) => { computeFrame(); return toXY(lon, lat); }, toLL: (x, y) => { computeFrame(); return toLL(x, y); } };
   init();
 })();
