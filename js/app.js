@@ -1329,9 +1329,10 @@ How to behave in chat:
         });
         outline = rings[0]; extraRings = rings.slice(1);
       }
-      [outline].concat(extraRings).forEach(o => {
+      [outline].concat(extraRings).forEach((o, k) => {
         if (o.length < 3) return;
-        areas.push({ id: uid(), points: o.map(p => toLL(p.x, p.y)), category: cat ? cat.id : null, hazards: (pa.hazards || []).map(h => ({ key: h.key, detail: h.detail || '' })), smooth: pa.smooth === false ? 0 : 0.7, label: null, showLabel: type.labels === 'arrow' || type.labels === 'optional', labelText: pa.label || null });
+        // extra pieces of the same forecast area share the first piece's label
+        areas.push({ id: uid(), points: o.map(p => toLL(p.x, p.y)), category: cat ? cat.id : null, hazards: (pa.hazards || []).map(h => ({ key: h.key, detail: h.detail || '' })), smooth: pa.smooth === false ? 0 : 0.7, label: null, showLabel: type.labels === 'arrow' || type.labels === 'optional', labelText: pa.label || null, hideLabel: k > 0 || undefined });
       });
       if (!cat) skipped.push('category "' + pa.category + '"');
     });
